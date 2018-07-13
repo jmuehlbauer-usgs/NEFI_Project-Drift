@@ -40,17 +40,22 @@ d2 <- sampspec(samp = d1, gear = 'Drift', stats = TRUE)
 	
 # Environmental data from Lees Ferry gage
 e0 <- readNWISuv(siteNumbers = '09380000', parameterCd = 
-	c('00010', '00045', '00060', '00065', '00095', '00300', '00301'), 
-	startDate = min(d2$Samples$Date), endDate = max(d2$Samples$Date))
-	# Function returns data on water temperature, precipitation, discharge, stage, 
-	# specific conductance, dissolved oxygen, and DO percent saturation
-	# for the range of drift sampling dates.
+	c('00010', '00060', '00065', '00095'), 
+	startDate = min(d2$Samples$Date), endDate = max(d2$Samples$Date), 
+	tz = 'America/Phoenix')
+	# Function returns data on water temperature, discharge, stage, 
+	# and specific conductance for the range of drift sampling dates.
 	# Takes a couple minutes to download it all. Save locally thereafter.
 
+# Get only environmental data columns of interest, rename
+e1 <- e0[, c('dateTime', 'X_00010_00000', 'X_00060_00000', 'X_00065_00000',
+	'X_00095_00000')]
+	colnames(e1) <- c('DateTime', 'Temperature', 'Discharge', 'Stage', 'SpC')
+	
 # Write environmental data locally to save time for future runs 
 dbdir <- paste0(find.package('foodbase'),'/Data')
 	# Location of the foodbase package "Data" folder.
-write.csv(e0, paste0(dbdir, '/GageData.csv'))
+write.csv(e0, paste0(dbdir, '/GageData.csv'), row.names = FALSE)
 
 # Read in these data (start from here after first code run)
 e0 <- read.csv(paste0(dbdir, '/GageData.csv'))
