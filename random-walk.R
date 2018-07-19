@@ -54,18 +54,19 @@ model{
   
   #### Data Model
   for(d in 1:num_days){
-      y[d] ~ dpois(x[d])
+      mu[d] <- exp(x[d])
+      y[d] ~ dpois(mu[d])
   }
   
   #### Process Model
   for(d in 2:num_days){
-      x[d]~dpois(x[d-1])
+      x[d]~dnorm(x[d-1], tau_add)
   }
   
   #### Priors
-  x[1]  ~ dpois(1)
+  x[1]  ~ dnorm(1,1)
  # tau_obs ~ dgamma(0.01,0.01)
- # tau_add ~ dgamma(0.01,0.01)
+  tau_add ~ dgamma(0.01,0.01)
 }
 "
 
@@ -87,18 +88,18 @@ j.model   <- jags.model (file = textConnection(RandomWalk),
 
 ## burn-in
 jags.out   <- coda.samples (model = j.model,
-                            variable.names = c('x'),
+                            variable.names = c('mu'),
                             n.iter = 5000)
-plot(jags.out)
+#plot(jags.out)
 
 
 
 time.rng = c(1,nrow(observation_matrix)) ## adjust to zoom in and out
 out <- as.matrix(jags.out)
-x.cols <- grep("^x",colnames(out)) ## grab all columns that start with the letter x
-ci <- apply(exp(out[,x.cols]),2,quantile,c(0.025,0.5,0.975))
+x.cols <- grep("^mu",colnames(out)) ## grab all columns that start with the letter x
+ci <- apply(out[,x.cols],2,quantile,c(0.025,0.5,0.975))
 
-plot(full_date_range$Date,ci[2,],type='n')
+plot(full_date_range$Date,ci[2,],type='n',ylim=c(-100, 1500))
 
 ecoforecastR::ciEnvelope(full_date_range$Date,ci[1,],ci[3,],col="lightBlue")
 points(full_date_range$Date,observation_matrix$CHIL.count,pch="+",cex=0.5)
