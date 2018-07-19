@@ -34,7 +34,7 @@ observation_matrix = samples.train %>%
 ##########################################
 
 # Now fill in unsampled dates with NA
-full_date_range = data.frame(Date=seq(min(observation_matrix$Date),max(observation_matrix$Date), by='days'))
+full_date_range = data.frame(Date=seq(min(observation_matrix$Date),as.Date('2016-07-01'), by='days'))
 
 observation_matrix = observation_matrix %>%
   right_join(full_date_range) %>%
@@ -88,7 +88,7 @@ j.model   <- jags.model (file = textConnection(RandomWalk),
 
 ## burn-in
 jags.out   <- coda.samples (model = j.model,
-                            variable.names = c('mu'),
+                            variable.names = c('mu','tau_add'),
                             n.iter = 5000)
 #plot(jags.out)
 
@@ -99,7 +99,9 @@ out <- as.matrix(jags.out)
 x.cols <- grep("^mu",colnames(out)) ## grab all columns that start with the letter x
 ci <- apply(out[,x.cols],2,quantile,c(0.025,0.5,0.975))
 
-plot(full_date_range$Date,ci[2,],type='n',ylim=c(-100, 1500))
+plot(full_date_range$Date,ci[2,],type='n',ylim=c(-100, 2000), xlim = c(as.Date('2015-07-01'),as.Date('2016-07-01')),
+     ylab = 'Midge Count',xlab='Date (July 2015 - July 2016')
 
 ecoforecastR::ciEnvelope(full_date_range$Date,ci[1,],ci[3,],col="lightBlue")
-points(full_date_range$Date,observation_matrix$CHIL.count,pch="+",cex=0.5)
+points(full_date_range$Date,observation_matrix$CHIL.count,pch="+",cex=2.5)
+points(samples.test$Date, samples.test$CHIL.count, cex=2.5)
