@@ -44,6 +44,7 @@ observation_matrix = observation_matrix %>%
 
 ###############
 # Setup data for jags
+observation_matrix$CHIL.count <- ceiling(observation_matrix$CHIL.count)
 data = list(y=observation_matrix$CHIL.count,
             num_days=nrow(observation_matrix))
 ###############
@@ -53,18 +54,18 @@ model{
   
   #### Data Model
   for(d in 1:num_days){
-      y[d] ~ dnorm(x[d],tau_obs)
+      y[d] ~ dpois(x[d])
   }
   
   #### Process Model
   for(d in 2:num_days){
-      x[d]~dnorm(x[d-1],tau_add)
+      x[d]~dpois(x[d-1])
   }
   
   #### Priors
-  x[1]  ~ dnorm(1,1)
-  tau_obs ~ dgamma(0.01,0.01)
-  tau_add ~ dgamma(0.01,0.01)
+  x[1]  ~ dpois(1)
+ # tau_obs ~ dgamma(0.01,0.01)
+ # tau_add ~ dgamma(0.01,0.01)
 }
 "
 
@@ -86,5 +87,18 @@ j.model   <- jags.model (file = textConnection(RandomWalk),
 
 ## burn-in
 jags.out   <- coda.samples (model = j.model,
-                            variable.names = c("tau_add","tau_obs",'x'),
-                            n.iter = 10000)
+                            variable.names = c('x'),
+                            n.iter = 5000)
+plot(jags.out)
+
+
+
+time.rng = c(1,nrow(observation_matrix)) ## adjust to zoom in and out
+out <- as.matrix(jags.out)
+x.cols <- grep("^x",colnames(out)) ## grab all columns that start with the letter x
+ci <- apply(exp(out[,x.cols]),2,quantile,c(0.025,0.5,0.975))
+
+plot(full_date_range$Date,ci[2,],type='n')
+
+ecoforecastR::ciEnvelope(full_date_range$Date,ci[1,],ci[3,],col="lightBlue")
+points(full_date_range$Date,observation_matrix$CHIL.count,pch="+",cex=0.5)
