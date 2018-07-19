@@ -65,7 +65,7 @@ data = list(y=observation_matrix$CHIL.count,
             discharge = observation_matrix$Qmean)
 ###############
 # This
-RandomWalk = "
+RandomWalk = " 
 model{
 
   #### Data Model
@@ -78,7 +78,8 @@ model{
   #### Process Model
 
   for(d in 2:num_days){
-  x[d] <- beta[1] + beta[2]*x[d-1] + beta[3]*discharge[d-1]  ## process model
+  w[d] <- x[d-1] + beta*discharge[d-1]  ## process model
+  x[d]~dnorm(w[d], tau_add)
 }
 
   
@@ -91,39 +92,154 @@ model{
 "
 
 ## specify priors
-data$b0 <- as.vector(c(0,0,0))      ## regression beta means
-data$Vb <- solve(diag(10000,3))   ## regression beta precisions
+data$b0 <- as.vector(c(0))      ## regression beta means
+data$Vb <- solve(diag(10000,1))   ## regression beta precisions
 ################
 
-# nchain = 3
-# init <- list()
-# for(i in 1:nchain){
-#   y.samp = sample(y,length(y),replace=TRUE)
-#   init[[i]] <- list(tau_add=1/var(diff(log(y.samp))),tau_obs=5/var(log(y.samp)))
-# }
+# inits <- list()
+# inits[[1]] <- list(beta = c(5,0,0))
+# inits[[2]] <- list(beta = c(5,0,0))
+# inits[[3]] <- list(beta = c(5,0,0))
+
 
 #############
 load.module('glm')
 j.model   <- jags.model (file = textConnection(RandomWalk),
                          data = data,
-                        # inits = init,
-                         n.chains = 3)
+                        # inits = inits,
+                         n.chains = 3,
+                        n.adapt = 3000)
 
 ## burn-in
 jags.out   <- coda.samples (model = j.model,
                             variable.names = c('mu','beta'),
-                            n.iter = 5000)
-#plot(jags.out)
+                            n.iter = 10000)
 
+# out <- list(params = NULL, predict = NULL)
+# mfit <- as.matrix(jags.out, chains = TRUE)
+# pred.cols <- grep("mu[", colnames(mfit), fixed = TRUE)
+# chain.col <- which(colnames(mfit) == "CHAIN")
+# out$predict <- ecoforecastR::mat2mcmc.list(mfit[, c(chain.col, pred.cols)])
+# out$params <- ecoforecastR::mat2mcmc.list(mfit[, -pred.cols])
+# plot(out$params)
+# plot(out$predict)
 
 
 time.rng = c(1,nrow(observation_matrix)) ## adjust to zoom in and out
 out <- as.matrix(jags.out)
 x.cols <- grep("mu",colnames(out)) ## grab all columns that start with the letter x
-ci <- apply(out[,x.cols],2,quantile,c(0.025,0.5,0.975))
+ci <- apply(log(out[,x.cols]),2,quantile,c(0.025,0.5,0.975))
 
-plot(full_date_range$Date,ci[2,],type='n', ylim=c(-10,60))
+plot(full_date_range$Date,ci[2,],type='n', ylim=c(0,10))
 
 ecoforecastR::ciEnvelope(full_date_range$Date,ci[1,],ci[3,],col="lightBlue")
 points(full_date_range$Date,log(observation_matrix$CHIL.count),pch="+",cex=0.5)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+##'  Kalman Filter
+##' @param  M   = model matrix
+##' @param  mu0 = initial condition mean vector
+##' @param  P0  = initial condition covariance matrix
+##' @param  Q   = process error covariance matrix
+##' @param  R   = observation error covariance matrix
+##' @param  Y   = observation matrix (with missing values as NAs), time as col's
+##'
+##' @return list
+##'  mu.f, mu.a  = state mean vector for (a)nalysis and (f)orecast steps
+##'  P.f, P.a    = state covariance matrix for a and f
+KalmanFilter <- function(M,mu0,P0,Q,R,Y){
+  
+  ## storage
+  nstates = nrow(Y)  
+  nt = ncol(Y)
+  mu.f  = matrix(NA,nstates,nt+1)  ## forecast mean for time t
+  mu.a  = matrix(NA,nstates,nt)  ## analysis mean for time t
+  P.f  = array(NA,c(nstates,nstates,nt+1))  ## forecast variance for time t
+  P.a  = array(NA,c(nstates,nstates,nt))  ## analysis variance for time t
+  
+  ## initialization
+  mu.f[,1] = mu0
+  P.f[,,1] = P0
+  I = diag(1,nstates)
+  
+  ## run updates sequentially for each observation.
+  for(t in 1:nt){
+    
+    ## Analysis step: combine previous forecast with observed data
+    KA <- KalmanAnalysis(mu.f[,t],P.f[,,t],Y[,t],R,I)
+    mu.a[,t] <- KA$mu.a
+    P.a[,,t] <- KA$P.a
+    
+    ## Forecast step: predict to next step from current
+    KF <- KalmanForecast(mu.a[,t],P.a[,,t],M,Q)
+    mu.f[,t+1] <- KF$mu.f
+    P.f[,,t+1] <- KF$P.f
+  }
+  
+  return(list(mu.f=mu.f,mu.a=mu.a,P.f=P.f,P.a=P.a))
+}
+
+##' Kalman Filter: Analysis step
+##' @param  mu.f = Forecast mean (vector)
+##' @param  P.f  = Forecast covariance (matrix)
+##' @param  Y    = observations, with missing values as NAs) (vector)
+##' @param  R    = observation error covariance (matrix)
+##' @param  H    = observation matrix (maps observations to states)
+KalmanAnalysis <- function(mu.f,P.f,Y,R,H){
+  obs = !is.na(Y) ## which Y's were observed?
+  if(any(obs)){
+    H <- H[obs,]                                              ## observation matrix
+    K <- P.f %*% t(H) %*% solve(H%*%P.f%*%t(H) + R[obs,obs])  ## Kalman gain
+    mu.a <- mu.f + K%*%(Y[obs] - H %*% mu.f)                  ## update mean
+    P.a <- (1-K %*% H)*P.f                                    ## update covariance
+  } else {
+    ##if there's no data, the posterior is the prior
+    mu.a = mu.f
+    P.a = P.f
+  }
+  return(list(mu.a=mu.a,P.a=P.a))
+}
+
+##' Kalman Filter: Forecast Step
+##' @param mu.a = analysis posterior mean (vector)
+##' @param P.a  = analysis posterior covariance (matrix)
+##' @param M    = model (matrix)
+##' @param  Q   = process error covariance (matrix)
+KalmanForecast <- function(mu.a,P.a,M,Q){
+  mu.f = M%*%mu.a
+  P.f  = Q + M*P.a*t(M)
+  return(list(mu.f=mu.f,P.f=P.f))
+}
+
 
