@@ -34,7 +34,7 @@ observation_matrix = samples.train %>%
 ##########################################
 
 # Now fill in unsampled dates with NA
-full_date_range  = data.frame(Date=seq(min(observation_matrix$Date),max(observation_matrix$Date), by='days'))
+full_date_range = data.frame(Date=seq(min(observation_matrix$Date),as.Date('2016-07-01'), by='days'))
 
 observation_matrix = observation_matrix %>%
   right_join(full_date_range) %>%
@@ -108,12 +108,12 @@ j.model   <- jags.model (file = textConnection(RandomWalk),
                          data = data,
                         # inits = inits,
                          n.chains = 3,
-                        n.adapt = 3000)
+                        n.adapt = 1000)
 
 ## burn-in
 jags.out   <- coda.samples (model = j.model,
-                            variable.names = c('mu','beta'),
-                            n.iter = 10000)
+                            variable.names = c('mu','beta','tau_add'),
+                            n.iter = 5000)
 
 # out <- list(params = NULL, predict = NULL)
 # mfit <- as.matrix(jags.out, chains = TRUE)
@@ -130,116 +130,74 @@ out <- as.matrix(jags.out)
 x.cols <- grep("mu",colnames(out)) ## grab all columns that start with the letter x
 ci <- apply(log(out[,x.cols]),2,quantile,c(0.025,0.5,0.975))
 
-plot(full_date_range$Date,ci[2,],type='n', ylim=c(0,10))
+# Plot the full time range. This is *with* dishcarge
+plot(full_date_range$Date,ci[2,],type='n',ylim=c(-5, 10), xlim = c(as.Date('2008-01-01'),as.Date('2015-12-31')),
+     xlab = 'Date (Jan. 2008 - Dec. 2015)', ylab='log(Midge Count)') 
+ecoforecastR::ciEnvelope(full_date_range$Date,ci[1,],ci[3,],col="lightBlue") 
+points(full_date_range$Date,log(observation_matrix$CHIL.count),pch="+",cex=1.5) 
+################################
+# Plot zoomed into the forecast period
+
+plot(full_date_range$Date,ci[2,],type='n',ylim=c(-5, 10), xlim = c(as.Date('2015-07-01'),as.Date('2016-07-01')),
+     ylab = 'log(Midge Count)',xlab='Date (July 2015 - July 2016)')
 
 ecoforecastR::ciEnvelope(full_date_range$Date,ci[1,],ci[3,],col="lightBlue")
-points(full_date_range$Date,log(observation_matrix$CHIL.count),pch="+",cex=0.5)
+points(full_date_range$Date,log(observation_matrix$CHIL.count),pch="+",cex=2.5)
+points(samples.test$Date, log(samples.test$CHIL.count), cex=2.5)
 
 
 
 
+######################################
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-##'  Kalman Filter
-##' @param  M   = model matrix
-##' @param  mu0 = initial condition mean vector
-##' @param  P0  = initial condition covariance matrix
-##' @param  Q   = process error covariance matrix
-##' @param  R   = observation error covariance matrix
-##' @param  Y   = observation matrix (with missing values as NAs), time as col's
-##'
-##' @return list
-##'  mu.f, mu.a  = state mean vector for (a)nalysis and (f)orecast steps
-##'  P.f, P.a    = state covariance matrix for a and f
-KalmanFilter <- function(M,mu0,P0,Q,R,Y){
-  
-  ## storage
-  nstates = nrow(Y)  
-  nt = ncol(Y)
-  mu.f  = matrix(NA,nstates,nt+1)  ## forecast mean for time t
-  mu.a  = matrix(NA,nstates,nt)  ## analysis mean for time t
-  P.f  = array(NA,c(nstates,nstates,nt+1))  ## forecast variance for time t
-  P.a  = array(NA,c(nstates,nstates,nt))  ## analysis variance for time t
-  
-  ## initialization
-  mu.f[,1] = mu0
-  P.f[,,1] = P0
-  I = diag(1,nstates)
-  
-  ## run updates sequentially for each observation.
-  for(t in 1:nt){
-    
-    ## Analysis step: combine previous forecast with observed data
-    KA <- KalmanAnalysis(mu.f[,t],P.f[,,t],Y[,t],R,I)
-    mu.a[,t] <- KA$mu.a
-    P.a[,,t] <- KA$P.a
-    
-    ## Forecast step: predict to next step from current
-    KF <- KalmanForecast(mu.a[,t],P.a[,,t],M,Q)
-    mu.f[,t+1] <- KF$mu.f
-    P.f[,,t+1] <- KF$P.f
+forecast_discharge = function(IC, beta, tau_add, nT, nMC, disharge){
+  state_storage = matrix(NA, nrow=nMC, ncol = nT)
+  state_storage[,1]=IC
+  for(t in 2:nT){
+    temp_storage = state_storage[,t-1] + beta*discharge[t-1]
+    state_storage[,t] = temp_storage + rnorm(nMC,mean=0,sd=1/sqrt(tau_add))
+    #state_storage[,t] = temp_storage
   }
-  
-  return(list(mu.f=mu.f,mu.a=mu.a,P.f=P.f,P.a=P.a))
+  return(state_storage)
 }
 
-##' Kalman Filter: Analysis step
-##' @param  mu.f = Forecast mean (vector)
-##' @param  P.f  = Forecast covariance (matrix)
-##' @param  Y    = observations, with missing values as NAs) (vector)
-##' @param  R    = observation error covariance (matrix)
-##' @param  H    = observation matrix (maps observations to states)
-KalmanAnalysis <- function(mu.f,P.f,Y,R,H){
-  obs = !is.na(Y) ## which Y's were observed?
-  if(any(obs)){
-    H <- H[obs,]                                              ## observation matrix
-    K <- P.f %*% t(H) %*% solve(H%*%P.f%*%t(H) + R[obs,obs])  ## Kalman gain
-    mu.a <- mu.f + K%*%(Y[obs] - H %*% mu.f)                  ## update mean
-    P.a <- (1-K %*% H)*P.f                                    ## update covariance
-  } else {
-    ##if there's no data, the posterior is the prior
-    mu.a = mu.f
-    P.a = P.f
-  }
-  return(list(mu.a=mu.a,P.a=P.a))
-}
 
-##' Kalman Filter: Forecast Step
-##' @param mu.a = analysis posterior mean (vector)
-##' @param P.a  = analysis posterior covariance (matrix)
-##' @param M    = model (matrix)
-##' @param  Q   = process error covariance (matrix)
-KalmanForecast <- function(mu.a,P.a,M,Q){
-  mu.f = M%*%mu.a
-  P.f  = Q + M*P.a*t(M)
-  return(list(mu.f=mu.f,P.f=P.f))
-}
+nMC = 4000
+nT=150
+
+#########################################
+# Forecast forward using only initial condition variance
+mc_rows = sample.int(nrow(out), size=nMC)
+# Last time step of observed data is 2015-12-20, id 2989 
+IC = log(out[mc_rows,'mu[2989]'])
+
+beta = mean(out[mc_rows,'beta'])
+tau_add = mean(out[mc_rows,'tau_add'])
+discharge = observation_matrix$Qmean[2989:(2989+nT)]
+
+IC_only_forecast = forecast_discharge(IC=IC, beta=beta,tau_add=tau_add, nT=nT, nMC=nMC, disharge = disharge)
+
+IC_only_ci <- apply(IC_only_forecast,2,quantile,c(0.025,0.5,0.975),na.rm=T)
+
+#######################################
+# forecast forward using initial condition variance AND variance and the beta parameter for dishcarge
+beta = out[mc_rows,'beta']
+
+IC_beta_forecast = forecast_discharge(IC=IC, beta=beta, tau_add=tau_add, nT=nT, nMC=nMC, disharge = disharge)
+IC_beta_ci <- apply(IC_beta_forecast,2,quantile,c(0.025,0.5,0.975),na.rm=T)
+
+
+################################
+# Plot zoomed into the forecast period
+
+plot(1:nT,IC_only_ci[2,],type='n',ylim=c(-5, 10), xlim = c(1,nT),
+     ylab = 'log(Midge Count)',xlab='Timesteps of forecast (Days)')
+
+ecoforecastR::ciEnvelope(1:nT,IC_beta_ci[1,],IC_beta_ci[3,],col="Red")
+ecoforecastR::ciEnvelope(1:nT,IC_only_ci[1,],IC_only_ci[3,],col="grey")
+
+
+
+
 
 
