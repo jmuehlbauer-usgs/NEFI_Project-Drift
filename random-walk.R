@@ -92,12 +92,24 @@ jags.out   <- coda.samples (model = j.model,
                             n.iter = 5000)
 #plot(jags.out)
 
+#jags.burn <- window(jags.out,start=10000)  ## remove burn-in
+
 
 
 time.rng = c(1,nrow(observation_matrix)) ## adjust to zoom in and out
 out <- as.matrix(jags.out)
 x.cols <- grep("^mu",colnames(out)) ## grab all columns that start with the letter x
 ci <- apply(out[,x.cols],2,quantile,c(0.025,0.5,0.975))
+
+###################################
+# Plot showing the full training range
+plot(full_date_range$Date,ci[2,],type='n',ylim=c(-100, 1500), xlim = c(as.Date('2008-01-01'),as.Date('2015-12-31')),
+     xlab = 'Date (Jan. 2008 - Dec. 2015)', ylab='Midge Count') 
+ecoforecastR::ciEnvelope(full_date_range$Date,ci[1,],ci[3,],col="lightBlue") 
+points(full_date_range$Date,observation_matrix$CHIL.count,pch="+",cex=1.5) 
+
+################################
+# Plot zoomed into the forecast period
 
 plot(full_date_range$Date,ci[2,],type='n',ylim=c(-100, 2000), xlim = c(as.Date('2015-07-01'),as.Date('2016-07-01')),
      ylab = 'Midge Count',xlab='Date (July 2015 - July 2016')
